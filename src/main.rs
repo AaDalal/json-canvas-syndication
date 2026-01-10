@@ -5,7 +5,7 @@ use std::str::FromStr;
 use clap::Parser;
 use notify::{self, Watcher};
 use syndicate_json_canvas_lib::jsoncanvas::JsonCanvas;
-use syndicate_json_canvas_lib::{to_syndication_format, default_node_filter, default_node_to_syndication_format_mapper};
+use syndicate_json_canvas_lib::{to_syndication_format, default_process_node};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -42,8 +42,7 @@ fn main() -> Result<(), Box<(dyn Error)>> {
                     let canvas = JsonCanvas::from_str(&content)?;
                     let syndication_items = to_syndication_format(
                         canvas,
-                        Some(default_node_filter),
-                        Some(default_node_to_syndication_format_mapper)
+                        Some(default_process_node)
                     );
                     println!("Found {} items to syndicate", syndication_items.len());
                     // TODO: actually syndicate the items

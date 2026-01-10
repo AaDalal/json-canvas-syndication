@@ -29,14 +29,12 @@ pub struct OutAdjacencies(pub Vec<(NodeId, EdgeId)>);
 #[derive(Clone, Debug)]
 pub struct InAdjacencies(pub Vec<(NodeId, EdgeId)>);
 
-pub fn to_syndication_format<F, M>(
+pub fn to_syndication_format<F>(
     canvas: JsonCanvas,
-    filter: Option<F>,
-    mapper: Option<M>,
+    process_node: Option<F>,
 ) -> Vec<SyndicationFormat>
 where
-    F: Fn(&jsoncanvas::Node, &OutAdjacencies, &InAdjacencies) -> bool,
-    M: Fn(&jsoncanvas::Node, &OutAdjacencies, &InAdjacencies) -> SyndicationFormat,
+    F: Fn(&jsoncanvas::Node, &OutAdjacencies, &InAdjacencies) -> Option<SyndicationFormat>,
 {
     let nodes = canvas.get_nodes();
     let edges = canvas.get_edges();
@@ -60,7 +58,7 @@ where
 
     nodes
         .iter()
-        .map(|(node_id, node)| {
+        .filter_map(|(node_id, node)| {
             let out_edges = out_adjacency_map
                 .get(node_id)
                 .cloned()
@@ -71,76 +69,54 @@ where
                 .cloned()
                 .unwrap_or_default();
 
-            (node, OutAdjacencies(out_edges), InAdjacencies(in_edges))
-        })
-        .filter(|(node, out_edges, in_edges)| {
-            if let Some(ref f) = filter {
-                f(node, out_edges, in_edges)
+            let out_adjacencies = OutAdjacencies(out_edges);
+            let in_adjacencies = InAdjacencies(in_edges);
+
+            if let Some(ref processor) = process_node {
+                processor(node, &out_adjacencies, &in_adjacencies)
             } else {
-                default_node_filter(node, out_edges, in_edges)
-            }
-        })
-        .map(|(node, out_edges, in_edges)| {
-            if let Some(ref m) = mapper {
-                m(node, &out_edges, &in_edges)
-            } else {
-                default_node_to_syndication_format_mapper(node, &out_edges, &in_edges)
+                default_process_node(node, &out_adjacencies, &in_adjacencies)
             }
         })
         .collect()
 }
 
-pub fn default_node_filter(node: &jsoncanvas::Node, _: &OutAdjacencies, _: &InAdjacencies) -> bool {
-    use jsoncanvas::color::{Color, PresetColor};
-
-    match node {
-        jsoncanvas::Node::Text(text_node) => {
-            let text = text_node.text();
-            if text.is_empty() {
-                return false;
-            }
-        },
-        _ => { return false }
-    }
-
-    if let Some(color) = node.color() {
-        if *color != Color::Preset(PresetColor::Red) {
-            return false;
-        }
-    } else {
-        return false;
-    };
-    return true;
-}
-
-pub fn default_node_to_syndication_format_mapper(
+/// Default node processor that filters for red text nodes and converts them to SyndicationFormat
+/// Returns Some(SyndicationFormat) if the node should be syndicated, None otherwise
+pub fn default_process_node(
     node: &jsoncanvas::Node,
     out_adjacencies: &OutAdjacencies,
     _in_adjacencies: &InAdjacencies
-) -> SyndicationFormat {
-    match node {
-        jsoncanvas::Node::Text(text_node) => {
-            // Extract edge IDs from out_adjacencies
-            let out_edge_ids = out_adjacencies.0.iter()
-                .map(|(_, edge_id)| edge_id.clone())
-                .collect();
+) -> Option<SyndicationFormat> {
+    use jsoncanvas::color::{Color, PresetColor};
 
-            SyndicationFormat {
-                id: text_node.id().clone(),
-                text: text_node.text().to_string(),
-                out_edge_ids,
-            }
-        },
-        _ => {
-            // For non-text nodes, we shouldn't reach here since filter removes them
-            // But if we do, use the generic node id
-            SyndicationFormat {
-                id: node.id().clone(),
-                text: String::new(),
-                out_edge_ids: Vec::new(),
-            }
-        }
+    // Filter: Only process Text nodes
+    let text_node = match node {
+        jsoncanvas::Node::Text(text_node) => text_node,
+        _ => return None,
+    };
+
+    // Filter: Skip empty text
+    if text_node.text().is_empty() {
+        return None;
     }
+
+    // Filter: Only red colored nodes
+    match node.color() {
+        Some(color) if *color == Color::Preset(PresetColor::Red) => {},
+        _ => return None,
+    }
+
+    // Map: Convert to SyndicationFormat
+    let out_edge_ids = out_adjacencies.0.iter()
+        .map(|(_, edge_id)| edge_id.clone())
+        .collect();
+
+    Some(SyndicationFormat {
+        id: text_node.id().clone(),
+        text: text_node.text().to_string(),
+        out_edge_ids,
+    })
 }
 
 mod tests {
