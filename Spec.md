@@ -47,6 +47,31 @@ The trait should support a **dry-run mode** where `dry_run: bool` determines whe
 3. Keep using the jsoncanvas crate
 4. **Use `thiserror` for error handling in the library crate**. Define a proper `SyndicationError` type instead of using `Box<dyn Error>`. 
 
+## JJ Repository Sink
+
+* Implement a sink that allows you to push to a jujutsu repository
+
+In order to fully define a commit and push flow in jj, we need a few things
+
+1. The bookmark name to update (default to main)
+2. The name of the remote to push to (default to origin)
+3. The path of the folder within a repository to put files in
+4. Commit message - should be 'Adding microblog `<slug>`\n\n<First 50 chars of content>'. The slug format is tbd (e.g., the first 8 words in the post or an llm summary of the post, either is fine, give me pros and cons) 
+5. The name of the file to use - shoudld be the slug above appended with the NodeId
+6. The contents of the file - This should have some frontmatter, probably just title (should match the slug) and date in YYYY-MM-DD format
+
+The first 3 should be required configuration options (ie members of the struct we use to implmenet SyndicationSink). The latter 3 should be done appropriately by our setup.
+
+Analogous JJ setup
+```sh
+jj git fetch # always run to refresh
+jj new --insert-after <bookmark name> -m <message> # this creates a new revision with the message
+# write out the file as needed
+jj b m <bookmark name>
+jj git push --remote <remote name> --bookmark <bookmark name>
+```
+
+
 ## Committing using Jujutsu (a git compatible VCS)
 
 The is a jujutsu (`jj`) repository: https://docs.jj-vcs.dev/latest/cli-reference/

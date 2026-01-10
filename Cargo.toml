@@ -6,5 +6,5 @@ edition = "2024"
 [workspace]
 
 [dependencies]
-notify = "8.2.0"
+notify-debouncer-mini = "0.5.0"
 syndicate-json-canvas-lib = { path = "syndicate-json-canvas-lib" }
