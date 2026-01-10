@@ -1,0 +1,9 @@
+[package]
+name = "syndicate-json-canvas-sinks"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+syndicate-json-canvas-lib = { path = "../syndicate-json-canvas-lib" }
+thiserror = "2.0"
+chrono = "0.4"

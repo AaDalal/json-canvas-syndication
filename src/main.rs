@@ -6,12 +6,22 @@ use std::time::Duration;
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind, notify::RecursiveMode};
 use syndicate_json_canvas_lib::jsoncanvas::JsonCanvas;
 use syndicate_json_canvas_lib::{to_syndication_format, default_process_node};
+use syndicate_json_canvas_sinks::{JjRepositorySink, SyndicationSink};
 
 // Configuration: Update this path to point to your JSON Canvas file
 const CANVAS_FILE_PATH: &str = "canvas.canvas";
 
 // Debounce duration in milliseconds - waits this long after last change before processing
 const DEBOUNCE_DURATION_MS: u64 = 500;
+
+// JJ Repository Sink Configuration
+const JJ_REPO_PATH: &str = "/path/to/your/jj/repo";
+const JJ_BOOKMARK_NAME: &str = "main";
+const JJ_REMOTE_NAME: &str = "origin";
+const JJ_FOLDER_PATH: &str = "microblog";
+
+// Set to true to see what would happen without actually publishing
+const DRY_RUN: bool = true;
 
 fn validate_canvas_path(path: &Path) -> Result<(), &str> {
     if !path.is_file() {
@@ -26,8 +36,18 @@ fn validate_canvas_path(path: &Path) -> Result<(), &str> {
 fn main() -> Result<(), Box<(dyn Error)>> {
     let canvas_path = PathBuf::from(CANVAS_FILE_PATH);
     validate_canvas_path(&canvas_path)?;
+
+    // Initialize JJ repository sink
+    let mut jj_sink = JjRepositorySink::new(
+        JJ_REPO_PATH,
+        JJ_BOOKMARK_NAME,
+        JJ_REMOTE_NAME,
+        JJ_FOLDER_PATH,
+    )?;
+
     println!("Watching canvas file: {} (debounce: {}ms)",
              canvas_path.display(), DEBOUNCE_DURATION_MS);
+    println!("Publishing to: {} (dry_run: {})", jj_sink.name(), DRY_RUN);
 
     let (tx, rx) = std::sync::mpsc::channel();
 
@@ -57,7 +77,14 @@ fn main() -> Result<(), Box<(dyn Error)>> {
                                                 Some(default_process_node)
                                             );
                                             println!("Found {} items to syndicate", syndication_items.len());
-                                            // TODO: actually syndicate the items
+
+                                            // Publish each item
+                                            for item in &syndication_items {
+                                                match jj_sink.publish(item, DRY_RUN) {
+                                                    Ok(()) => println!("Published item: {}", item.id),
+                                                    Err(e) => eprintln!("Failed to publish item {}: {}", item.id, e),
+                                                }
+                                            }
                                         }
                                         Err(e) => eprintln!("Failed to parse canvas: {}", e),
                                     }
