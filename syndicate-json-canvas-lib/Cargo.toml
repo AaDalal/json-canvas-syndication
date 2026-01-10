@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 jsoncanvas = "0.1.6"
+thiserror = "2.0"

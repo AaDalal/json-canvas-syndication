@@ -25,22 +25,27 @@ There are a few features:
 
 1. Each piece of content to be syndicated should be coerced to the `SyndicationFormat` type. This is a type shared between the backend the frontend.
 
-2. A syndication sink should be a trait:
+2. **IMPORTANT: Simplify lifetimes in SyndicationFormat**. Instead of storing references with lifetimes, store NodeIds and EdgeIds. These are cheap to clone and can be converted to CoW strings when needed. This avoids complex lifetime issues and makes the code much simpler.
 
-```
+3. A syndication sink should be a trait:
+
+```rust
 trait SyndicationSink {
-  fn publish(item: SyndicationFormat)
+  fn publish(&mut self, item: &SyndicationFormat, dry_run: bool) -> Result<(), SyndicationError>;
+  fn name(&self) -> &str;
 }
 ```
-(feel free to take some liberty here)
 
-3. We need a new library crate for the frontend. This crate should define the relevant trait, but also provide an implementation for Twitter and for git commiting + pushing files to a repository (by taking a path to the repository on disk)
+The trait should support a **dry-run mode** where `dry_run: bool` determines whether to actually perform the syndication or just log what would happen. This is useful for testing and validation.
+
+4. We need a new library crate for the frontend. This crate should define the relevant trait, but also provide an implementation for Twitter and for git commiting + pushing files to a repository (by taking a path to the repository on disk)
 
 ## Libraries to use
 
 1. For now, remove the dependence on clap. The expectation should be that the user hard codes the path to the jsoncanvas (`.canvas`) file.
 2. Keep using notify, but add debouncing: https://docs.rs/notify-debouncer-mini/latest/notify_debouncer_mini/ - read this file.
-3. Keep using the jsoncanvas crate 
+3. Keep using the jsoncanvas crate
+4. **Use `thiserror` for error handling in the library crate**. Define a proper `SyndicationError` type instead of using `Box<dyn Error>`. 
 
 ## Committing using Jujutsu (a git compatible VCS)
 
