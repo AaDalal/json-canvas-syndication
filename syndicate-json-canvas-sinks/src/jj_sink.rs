@@ -1,9 +1,10 @@
+use crate::{SinkError, SyndicationSink};
+use chrono::Local;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use chrono::Local;
+use syndicate_json_canvas_lib::{SyndicationFormat, jsoncanvas::NodeId};
 use tracing::{debug, info};
-use syndicate_json_canvas_lib::SyndicationFormat;
-use crate::{SinkError, SyndicationSink};
 
 /// Configuration for JJ repository syndication sink
 pub struct JjRepositorySink {
@@ -73,33 +74,90 @@ impl JjRepositorySink {
     }
 
     /// Generate the filename for a syndication item
-    fn generate_filename(item: &SyndicationFormat) -> String {
-        let slug = Self::generate_slug(&item.text);
-        let node_id = item.id.as_str();
-        format!("{}-{}.md", slug, node_id)
+    fn generate_filename(slug: &str, node_id: &NodeId) -> String {
+        format!("{}-{}.md", slug, node_id.as_str())
     }
 
-    /// Generate file contents with frontmatter
-    fn generate_file_contents(item: &SyndicationFormat) -> String {
-        let slug = Self::generate_slug(&item.text);
+    /// Escape double quotes and backslashes for YAML string values
+    fn escape_yaml_string(s: &str) -> String {
+        s.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+
+    /// Generate file contents with frontmatter including cross-references
+    fn generate_file_contents(
+        item: &SyndicationFormat,
+        _slug: &str,
+        slugs: &HashMap<NodeId, String>,
+        all_items: &HashMap<NodeId, SyndicationFormat>,
+    ) -> String {
         let date = Local::now().format("%Y-%m-%d").to_string();
 
-        format!(
-            "---\ntitle: \"{}\"\ndate: {}\n---\n\n{}",
-            slug, date, item.text
-        )
-    }
+        // Use first 8 words for title, or full text if shorter
+        let title: String = item.text
+            .split_whitespace()
+            .take(8)
+            .collect::<Vec<_>>()
+            .join(" ");
 
-    /// Generate commit message
-    fn generate_commit_message(item: &SyndicationFormat) -> String {
-        let slug = Self::generate_slug(&item.text);
-        let preview = if item.text.len() > 50 {
-            format!("{}...", &item.text[..50])
-        } else {
-            item.text.clone()
-        };
+        // Build context_for_this list (in-neighbors with /t/ prefix)
+        // Each item is an object with link_text and href
+        let context_for_this: Vec<(String, String)> = item.in_neighbor_ids
+            .iter()
+            .filter_map(|node_id| {
+                let neighbor_slug = slugs.get(node_id)?;
+                let neighbor_item = all_items.get(node_id)?;
+                let link_text: String = neighbor_item.text
+                    .split_whitespace()
+                    .take(8)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let href = format!("/t/{}-{}.md", neighbor_slug, node_id.as_str());
+                Some((link_text, href))
+            })
+            .collect();
 
-        format!("Adding microblog `{}`\n\n{}", slug, preview)
+        // Build further_thinking list (out-neighbors with /t/ prefix)
+        // Each item is an object with link_text and href
+        let further_thinking: Vec<(String, String)> = item.out_neighbor_ids
+            .iter()
+            .filter_map(|node_id| {
+                let neighbor_slug = slugs.get(node_id)?;
+                let neighbor_item = all_items.get(node_id)?;
+                let link_text: String = neighbor_item.text
+                    .split_whitespace()
+                    .take(8)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let href = format!("/t/{}-{}.md", neighbor_slug, node_id.as_str());
+                Some((link_text, href))
+            })
+            .collect();
+
+        // Format frontmatter with escaped strings
+        let mut frontmatter = format!(
+            "---\ntitle: \"{}\"\ndate: {}\n",
+            Self::escape_yaml_string(&title), date
+        );
+
+        if !context_for_this.is_empty() {
+            frontmatter.push_str("context_for_this:\n");
+            for (link_text, href) in context_for_this {
+                frontmatter.push_str(&format!("  - link_text: \"{}\"\n", Self::escape_yaml_string(&link_text)));
+                frontmatter.push_str(&format!("    href: \"{}\"\n", href));
+            }
+        }
+
+        if !further_thinking.is_empty() {
+            frontmatter.push_str("further_thinking:\n");
+            for (link_text, href) in further_thinking {
+                frontmatter.push_str(&format!("  - link_text: \"{}\"\n", Self::escape_yaml_string(&link_text)));
+                frontmatter.push_str(&format!("    href: \"{}\"\n", href));
+            }
+        }
+
+        frontmatter.push_str("---\n\n");
+
+        format!("{}{}", frontmatter, item.text)
     }
 
     /// Run a JJ command in the repository
@@ -156,24 +214,38 @@ impl JjRepositorySink {
 }
 
 impl SyndicationSink for JjRepositorySink {
-    fn publish(&mut self, item: &SyndicationFormat, dry_run: bool) -> Result<(), SinkError> {
-        info!("Publishing to JJ repository");
+    fn publish(&mut self, items: &HashMap<NodeId, SyndicationFormat>, dry_run: bool) -> Result<(), SinkError> {
+        info!(item_count = items.len(), "Publishing to JJ repository");
+
+        if items.is_empty() {
+            info!("No items to publish");
+            return Ok(());
+        }
 
         // Step 1: jj git fetch
         self.run_jj_command(&["git", "fetch"], dry_run)?;
 
-        // Step 2: Generate content
-        let filename = Self::generate_filename(item);
-        let contents = Self::generate_file_contents(item);
-        let commit_message = Self::generate_commit_message(item);
+        // Step 2: Pre-compute slugs for all items
+        let slugs: HashMap<NodeId, String> = items
+            .iter()
+            .map(|(node_id, item)| (node_id.clone(), Self::generate_slug(&item.text)))
+            .collect();
 
-        debug!(
-            filename = %filename,
-            slug = %Self::generate_slug(&item.text),
-            "Generated content"
-        );
+        // Step 3: Generate commit message
+        let commit_message = if items.len() == 1 {
+            let item = items.values().next().unwrap();
+            let slug = slugs.get(&item.id).unwrap();
+            let preview = if item.text.len() > 50 {
+                format!("{}...", &item.text[..50])
+            } else {
+                item.text.clone()
+            };
+            format!("Adding microblog `{}`\n\n{}", slug, preview)
+        } else {
+            format!("Update microblogs ({} posts)", items.len())
+        };
 
-        // Step 3: jj new --insert-after <bookmark> -m <message>
+        // Step 4: jj new --insert-after <bookmark> -m <message>
         self.run_jj_command(
             &[
                 "new",
@@ -185,13 +257,25 @@ impl SyndicationSink for JjRepositorySink {
             dry_run,
         )?;
 
-        // Step 4: Write the file
-        self.write_file(&filename, &contents, dry_run)?;
+        // Step 5: Write all files
+        for (node_id, item) in items.iter() {
+            let slug = slugs.get(node_id).unwrap();
+            let filename = Self::generate_filename(slug, node_id);
+            let contents = Self::generate_file_contents(item, slug, &slugs, items);
 
-        // Step 5: jj bookmark move <bookmark>
+            debug!(
+                filename = %filename,
+                slug = %slug,
+                "Generated content"
+            );
+
+            self.write_file(&filename, &contents, dry_run)?;
+        }
+
+        // Step 6: jj bookmark move <bookmark>
         self.run_jj_command(&["bookmark", "move", &self.bookmark_name], dry_run)?;
 
-        // Step 6: jj git push --remote <remote> --bookmark <bookmark>
+        // Step 7: jj git push --remote <remote> --bookmark <bookmark>
         self.run_jj_command(
             &[
                 "git",
@@ -209,6 +293,6 @@ impl SyndicationSink for JjRepositorySink {
     }
 
     fn name(&self) -> &str {
-        "JJ Repository"
+        "jj"
     }
 }

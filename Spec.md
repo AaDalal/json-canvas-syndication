@@ -14,12 +14,15 @@ There are a few features:
 ### Current
 
 1. Critically, the backend should allow filtering the nodes. Currently the default filter just checks that the node is a `TextNode`, has a non-empty `text` field, and is colored red before publishing it
-2. Besides that, the backend should provide another function to marshal the type to
-
-### Changes Desired
-
-1. In reality, i want you to convert these two functions into one which we can use inside a `filter_map`.
-2. Also, things don't build
+2. The backend should return a **HashMap/mapping from NodeId to SyndicationFormat**, not a Vec. This allows looking up nodes by ID when building references.
+3. The backend should **detect cycles** in the graph:
+   - Use topological sort to detect cycles
+   - If a cycle is detected, print an error
+   - Add a special node to the canvas alerting the user about the cycle (place it in the center of the canvas)
+4. Each `SyndicationFormat` should now include:
+   - `in_neighbor_ids: Vec<NodeId>` - nodes that point TO this node
+   - `out_neighbor_ids: Vec<NodeId>` - nodes that this node points TO
+   - This enables creating links between related posts
 
 ## Code structuring
 
@@ -27,22 +30,39 @@ There are a few features:
 
 2. **IMPORTANT: Simplify lifetimes in SyndicationFormat**. Instead of storing references with lifetimes, store NodeIds and EdgeIds. These are cheap to clone and can be converted to CoW strings when needed. This avoids complex lifetime issues and makes the code much simpler.
 
-3. A syndication sink should be a trait:
+3. **SyndicationFormat structure:**
+```rust
+struct SyndicationFormat {
+    id: NodeId,
+    text: String,
+    in_neighbor_ids: Vec<NodeId>,   // nodes that point TO this node
+    out_neighbor_ids: Vec<NodeId>,  // nodes that this node points TO
+}
+```
+
+4. A syndication sink should be a trait:
 
 ```rust
 trait SyndicationSink {
-  fn publish(&mut self, item: &SyndicationFormat, dry_run: bool) -> Result<(), SyndicationError>;
+  fn publish(&mut self, items: &HashMap<NodeId, SyndicationFormat>, dry_run: bool) -> Result<(), SinkError>;
   fn name(&self) -> &str;
 }
 ```
 
+**IMPORTANT:** The `publish` method now takes ALL items at once (as a HashMap), not one at a time. This is necessary because:
+- We need to compute slugs for all nodes to create proper cross-references
+- Links between posts require knowing about all nodes simultaneously
+- Different sinks may need to process items in specific orders
+
 The trait should support a **dry-run mode** where `dry_run: bool` determines whether to actually perform the syndication or just log what would happen. This is useful for testing and validation.
 
-4. We need a new library crate for the frontend. This crate should define the relevant trait, but also provide an implementation for Twitter and for git commiting + pushing files to a repository (by taking a path to the repository on disk)
+5. We need a new library crate for the frontend. This crate should define the relevant trait, but also provide an implementation for Twitter and for git commiting + pushing files to a repository (by taking a path to the repository on disk)
 
 ## Deduplication Tracking
 
-To prevent duplicate publishing, we need to track which NodeIds have already been published to each sink.
+**NOTE: This is only relevant for Twitter/X syndication, not for the JJ repository sink.** The JJ sink does NOT use deduplication - it's acceptable to redo work since git history tracks everything naturally.
+
+For Twitter/X and similar sinks where duplicate publishing is problematic, we need to track which NodeIds have already been published to each sink.
 
 **Implementation requirements:**
 
@@ -84,23 +104,35 @@ published_node_ids = [
 ## JJ Repository Sink
 
 * Implement a sink that allows you to push to a jujutsu repository
+* **IMPORTANT: No deduplication tracking.** It's acceptable to redo work - just rewrite all files each time. Git history naturally tracks changes.
 
 In order to fully define a commit and push flow in jj, we need a few things
 
 1. The bookmark name to update (default to main)
 2. The name of the remote to push to (default to origin)
 3. The path of the folder within a repository to put files in
-4. Commit message - should be 'Adding microblog `<slug>`\n\n<First 50 chars of content>'. The slug format is tbd (e.g., the first 8 words in the post or an llm summary of the post, either is fine, give me pros and cons) 
-5. The name of the file to use - shoudld be the slug above appended with the NodeId
-6. The contents of the file - This should have some frontmatter, probably just title (should match the slug) and date in YYYY-MM-DD format
+4. Commit message - should be 'Adding microblog `<slug>`\n\n<First 50 chars of content>'. Use the first 8 words of the post for the slug.
+5. The name of the file to use - should be the slug above appended with the NodeId
+6. The contents of the file - This should have:
+   - Frontmatter with:
+     - `title`: First 8 words of the post (readable, not dasherized)
+     - `date`: Current date in YYYY-MM-DD format
+     - `context_for_this`: List of slugs for in-neighbor nodes (nodes that point TO this node), prefixed with '/t/'
+     - `further_thinking`: List of slugs for out-neighbor nodes (nodes this node points TO), prefixed with '/t/'
+   - Body: The full text content (no footer links needed - they will be inferred from frontmatter)
 
-The first 3 should be required configuration options (ie members of the struct we use to implmenet SyndicationSink). The latter 3 should be done appropriately by our setup.
+**Implementation notes:**
+- Must pre-compute slugs for ALL nodes before generating any files (needed for cross-references)
+- Process all items in a single publish call (the trait signature supports this)
+- Each file should link to its related posts using their computed slugs
+
+The first 3 should be required configuration options (ie members of the struct we use to implement SyndicationSink). The latter 3 should be done appropriately by our setup.
 
 Analogous JJ setup
 ```sh
 jj git fetch # always run to refresh
 jj new --insert-after <bookmark name> -m <message> # this creates a new revision with the message
-# write out the file as needed
+# write out all the files as needed
 jj b m <bookmark name>
 jj git push --remote <remote name> --bookmark <bookmark name>
 ```

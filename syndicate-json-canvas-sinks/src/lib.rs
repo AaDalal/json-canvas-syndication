@@ -1,9 +1,12 @@
-use syndicate_json_canvas_lib::SyndicationFormat;
+use std::collections::HashMap;
+use syndicate_json_canvas_lib::{SyndicationFormat, jsoncanvas::NodeId};
 
 pub mod jj_sink;
+pub mod twitter_sink;
 
-// Re-export the main trait
+// Re-export the main types
 pub use jj_sink::JjRepositorySink;
+pub use twitter_sink::TwitterSink;
 
 /// Error types for syndication sinks
 #[derive(Debug, thiserror::Error)]
@@ -26,16 +29,24 @@ pub enum SinkError {
 /// Implementors can publish SyndicationFormat items to various destinations
 /// (Twitter, git repositories, etc.)
 pub trait SyndicationSink {
-    /// Publish an item to the sink
+    /// Publish all items to the sink
     ///
     /// # Arguments
-    /// * `item` - The content to syndicate
+    /// * `items` - HashMap of NodeId to SyndicationFormat containing all items to syndicate
     /// * `dry_run` - If true, only log what would happen without actually publishing
     ///
     /// # Returns
     /// Ok(()) on success, or SinkError on failure
-    fn publish(&mut self, item: &SyndicationFormat, dry_run: bool) -> Result<(), SinkError>;
+    ///
+    /// # Notes
+    /// Takes all items at once to enable computing slugs and creating cross-references between posts
+    fn publish(&mut self, items: &HashMap<NodeId, SyndicationFormat>, dry_run: bool) -> Result<(), SinkError>;
 
-    /// Returns the name of this sink for logging/debugging
+    /// Returns the name of this sink. This name should not have spaces & be unique.
+    ///
+    /// # Examples
+    ///
+    /// - jj
+    /// - twitter
     fn name(&self) -> &str;
 }

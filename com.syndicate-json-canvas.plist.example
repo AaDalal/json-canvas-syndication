@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.syndicate-json-canvas</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/path/to/syndicate-json-canvas/target/release/syndicate-obsidian-canvas</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/path/to/logs/syndicate-json-canvas.log</string>
+    <key>StandardErrorPath</key>
+    <string>/path/to/logs/syndicate-json-canvas.err</string>
+    <key>WorkingDirectory</key>
+    <string>/path/to/syndicate-json-canvas</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
