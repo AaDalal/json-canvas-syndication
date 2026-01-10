@@ -1,36 +1,32 @@
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use clap::Parser;
 use notify::{self, Watcher};
 use syndicate_json_canvas_lib::jsoncanvas::JsonCanvas;
 use syndicate_json_canvas_lib::{to_syndication_format, default_process_node};
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    path: PathBuf,
-}
+// Configuration: Update this path to point to your JSON Canvas file
+const CANVAS_FILE_PATH: &str = "canvas.canvas";
 
-impl Args {
-    fn validate(&self) -> Result<(), &str> {
-        if !self.path.is_file() {
-            return Err("Provided path must be a file");
-        }
-        if self.path.extension().and_then(|s| s.to_str()) != Some("canvas") {
-            return Err("Expect the extension to be .canvas");
-        }
-        Ok(())
+fn validate_canvas_path(path: &Path) -> Result<(), &str> {
+    if !path.is_file() {
+        return Err("Provided path must be a file");
     }
+    if path.extension().and_then(|s| s.to_str()) != Some("canvas") {
+        return Err("Expect the extension to be .canvas");
+    }
+    Ok(())
 }
 
 fn main() -> Result<(), Box<(dyn Error)>> {
-    let args = Args::parse();
-    args.validate()?;
+    let canvas_path = PathBuf::from(CANVAS_FILE_PATH);
+    validate_canvas_path(&canvas_path)?;
+    println!("Watching canvas file: {}", canvas_path.display());
+
     let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
     let mut watcher = notify::recommended_watcher(tx)?;
-    watcher.watch(&args.path, notify::RecursiveMode::NonRecursive)?;
+    watcher.watch(&canvas_path, notify::RecursiveMode::NonRecursive)?;
 
     for res in rx {
         use notify::EventKind;
@@ -38,7 +34,7 @@ fn main() -> Result<(), Box<(dyn Error)>> {
             Ok(event) => match event.kind {
                 EventKind::Modify(_) | EventKind::Create(_) => {
                     // Read the file and parse it
-                    let content = std::fs::read_to_string(&args.path)?;
+                    let content = std::fs::read_to_string(&canvas_path)?;
                     let canvas = JsonCanvas::from_str(&content)?;
                     let syndication_items = to_syndication_format(
                         canvas,
