@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use syndicate_json_canvas_lib::jsoncanvas::{JsonCanvas, NodeId};
 use syndicate_json_canvas_lib::{default_process_node, to_syndication_format};
 use syndicate_json_canvas_sinks::{JjRepositorySink, SyndicationSink};
+use tracing::{debug, error, info};
+use tracing_subscriber::EnvFilter;
 
 // Configuration: Update this path to point to your JSON Canvas file
 const CANVAS_FILE_PATH: &str = "canvas.canvas";
@@ -98,6 +100,16 @@ fn validate_canvas_path(path: &Path) -> Result<(), &str> {
 }
 
 fn main() -> Result<(), Box<(dyn Error)>> {
+    // Initialize tracing subscriber with line numbers
+    // Use DEBUG level when dry_run is true, otherwise INFO
+    let log_level = if DRY_RUN { "debug" } else { "info" };
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new(log_level))
+        .with_line_number(true)
+        .with_file(true)
+        .with_target(false)
+        .init();
+
     let canvas_path = PathBuf::from(CANVAS_FILE_PATH);
     validate_canvas_path(&canvas_path)?;
 
@@ -113,14 +125,17 @@ fn main() -> Result<(), Box<(dyn Error)>> {
     let tracker_path = get_tracker_path(&canvas_path, "jj")?;
     let mut jj_tracker = PublishedTracker::load(&tracker_path)?;
 
-    println!(
-        "Watching canvas file: {} (debounce: {}ms)",
-        canvas_path.display(),
-        DEBOUNCE_DURATION_MS
+    info!(
+        canvas_file = %canvas_path.display(),
+        debounce_ms = DEBOUNCE_DURATION_MS,
+        "Watching canvas file"
     );
-    println!("Publishing to: {} (dry_run: {})", jj_sink.name(), DRY_RUN);
-    println!("Tracker file: {}", tracker_path.display());
-    println!("Previously published: {} items", jj_tracker.published_node_ids.len());
+    info!(sink = jj_sink.name(), dry_run = DRY_RUN, "Publishing configuration");
+    info!(tracker_file = %tracker_path.display(), "Tracker file location");
+    info!(
+        previously_published = jj_tracker.published_node_ids.len(),
+        "Loaded published tracker"
+    );
 
     let (tx, rx) = std::sync::mpsc::channel();
 
@@ -138,7 +153,7 @@ fn main() -> Result<(), Box<(dyn Error)>> {
                 for event in events {
                     match event.kind {
                         DebouncedEventKind::Any => {
-                            println!("File changed, processing...");
+                            info!("File changed, processing...");
                             // Read the file and parse it
                             match std::fs::read_to_string(&canvas_path) {
                                 Ok(content) => {
@@ -148,9 +163,9 @@ fn main() -> Result<(), Box<(dyn Error)>> {
                                                 canvas,
                                                 Some(default_process_node),
                                             );
-                                            println!(
-                                                "Found {} items to syndicate",
-                                                syndication_items.len()
+                                            debug!(
+                                                items_count = syndication_items.len(),
+                                                "Found items to syndicate"
                                             );
 
                                             // Filter out already-published items
@@ -159,10 +174,10 @@ fn main() -> Result<(), Box<(dyn Error)>> {
                                                 .filter(|item| !jj_tracker.is_published(&item.id))
                                                 .collect();
 
-                                            println!(
-                                                "New items to publish: {} (skipping {} already published)",
-                                                new_items.len(),
-                                                syndication_items.len() - new_items.len()
+                                            info!(
+                                                new_items = new_items.len(),
+                                                already_published = syndication_items.len() - new_items.len(),
+                                                "Filtered items"
                                             );
 
                                             // Publish each new item
@@ -170,14 +185,15 @@ fn main() -> Result<(), Box<(dyn Error)>> {
                                             for item in &new_items {
                                                 match jj_sink.publish(item, DRY_RUN) {
                                                     Ok(()) => {
-                                                        println!("Published item: {}", item.id);
+                                                        info!(node_id = %item.id, "Published item");
                                                         // Mark as published
                                                         jj_tracker.mark_published(&item.id);
                                                         published_count += 1;
                                                     }
-                                                    Err(e) => eprintln!(
-                                                        "Failed to publish item {}: {}",
-                                                        item.id, e
+                                                    Err(e) => error!(
+                                                        node_id = %item.id,
+                                                        error = %e,
+                                                        "Failed to publish item"
                                                     ),
                                                 }
                                             }
@@ -185,18 +201,18 @@ fn main() -> Result<(), Box<(dyn Error)>> {
                                             // Save tracker if we published anything
                                             if published_count > 0 {
                                                 match jj_tracker.save(&tracker_path) {
-                                                    Ok(()) => println!(
-                                                        "Saved tracker: {} total published items",
-                                                        jj_tracker.published_node_ids.len()
+                                                    Ok(()) => info!(
+                                                        total_published = jj_tracker.published_node_ids.len(),
+                                                        "Saved tracker"
                                                     ),
-                                                    Err(e) => eprintln!("Failed to save tracker: {}", e),
+                                                    Err(e) => error!(error = %e, "Failed to save tracker"),
                                                 }
                                             }
                                         }
-                                        Err(e) => eprintln!("Failed to parse canvas: {}", e),
+                                        Err(e) => error!(error = %e, "Failed to parse canvas"),
                                     }
                                 }
-                                Err(e) => eprintln!("Failed to read file: {}", e),
+                                Err(e) => error!(error = %e, "Failed to read file"),
                             }
                         }
                         _ => {}
@@ -204,7 +220,7 @@ fn main() -> Result<(), Box<(dyn Error)>> {
                 }
             }
             Err(error) => {
-                eprintln!("Watch error: {:?}", error);
+                error!(error = ?error, "Watch error");
             }
         }
     }

@@ -7,3 +7,4 @@ edition = "2024"
 syndicate-json-canvas-lib = { path = "../syndicate-json-canvas-lib" }
 thiserror = "2.0"
 chrono = "0.4"
+tracing = "0.1"

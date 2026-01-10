@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use chrono::Local;
+use tracing::{debug, info};
 use syndicate_json_canvas_lib::SyndicationFormat;
 use crate::{SinkError, SyndicationSink};
 
@@ -106,11 +107,11 @@ impl JjRepositorySink {
         let args_str = args.join(" ");
 
         if dry_run {
-            println!("[DRY RUN] Would execute: jj {}", args_str);
+            debug!(command = %format!("jj {}", args_str), "[DRY RUN] Would execute command");
             return Ok(String::new());
         }
 
-        println!("Executing: jj {}", args_str);
+        debug!(command = %format!("jj {}", args_str), "Executing command");
 
         let output = Command::new("jj")
             .args(args)
@@ -134,8 +135,11 @@ impl JjRepositorySink {
         let file_path = self.repo_path.join(&self.folder_path).join(filename);
 
         if dry_run {
-            println!("[DRY RUN] Would write file: {}", file_path.display());
-            println!("[DRY RUN] Contents:\n{}", contents);
+            debug!(
+                file = %file_path.display(),
+                contents = %contents,
+                "[DRY RUN] Would write file"
+            );
             return Ok(());
         }
 
@@ -145,7 +149,7 @@ impl JjRepositorySink {
         }
 
         std::fs::write(&file_path, contents)?;
-        println!("Wrote file: {}", file_path.display());
+        debug!(file = %file_path.display(), "Wrote file");
 
         Ok(())
     }
@@ -153,7 +157,7 @@ impl JjRepositorySink {
 
 impl SyndicationSink for JjRepositorySink {
     fn publish(&mut self, item: &SyndicationFormat, dry_run: bool) -> Result<(), SinkError> {
-        println!("Publishing to JJ repository...");
+        info!("Publishing to JJ repository");
 
         // Step 1: jj git fetch
         self.run_jj_command(&["git", "fetch"], dry_run)?;
@@ -162,6 +166,12 @@ impl SyndicationSink for JjRepositorySink {
         let filename = Self::generate_filename(item);
         let contents = Self::generate_file_contents(item);
         let commit_message = Self::generate_commit_message(item);
+
+        debug!(
+            filename = %filename,
+            slug = %Self::generate_slug(&item.text),
+            "Generated content"
+        );
 
         // Step 3: jj new --insert-after <bookmark> -m <message>
         self.run_jj_command(
@@ -194,7 +204,7 @@ impl SyndicationSink for JjRepositorySink {
             dry_run,
         )?;
 
-        println!("Successfully published to JJ repository");
+        info!("Successfully published to JJ repository");
         Ok(())
     }
 
