@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -17,19 +18,28 @@ const CANVAS_FILE_PATH: &str = "canvas.canvas";
 // Debounce duration in milliseconds - waits this long after last change before processing
 const DEBOUNCE_DURATION_MS: u64 = 500;
 
-// JJ Repository Sink Configuration
-const JJ_REPO_PATH: &str = "/path/to/your/jj/repo";
-const JJ_BOOKMARK_NAME: &str = "main";
-const JJ_REMOTE_NAME: &str = "origin";
-const JJ_FOLDER_PATH: &str = "microblog";
-
 // Set to true to see what would happen without actually publishing
 const DRY_RUN: bool = true;
+
+// JJ Repository Sink Configuration
+struct JjSinkConfig {
+    repo_path: &'static str,
+    bookmark_name: &'static str,
+    remote_name: &'static str,
+    folder_path: &'static str,
+}
+
+const JJ_SINK_CONFIG: JjSinkConfig = JjSinkConfig {
+    repo_path: "/path/to/your/jj/repo",
+    bookmark_name: "main",
+    remote_name: "origin",
+    folder_path: "microblog",
+};
 
 /// Tracks which NodeIds have been published to prevent duplicates
 #[derive(Debug, Serialize, Deserialize)]
 struct PublishedTracker {
-    published_node_ids: Vec<String>,
+    published_node_ids: HashSet<String>,
 }
 
 impl PublishedTracker {
@@ -41,7 +51,7 @@ impl PublishedTracker {
             Ok(tracker)
         } else {
             Ok(PublishedTracker {
-                published_node_ids: Vec::new(),
+                published_node_ids: HashSet::new(),
             })
         }
     }
@@ -64,10 +74,7 @@ impl PublishedTracker {
 
     /// Mark a NodeId as published
     fn mark_published(&mut self, node_id: &NodeId) {
-        let node_id_str = node_id.to_string();
-        if !self.published_node_ids.contains(&node_id_str) {
-            self.published_node_ids.push(node_id_str);
-        }
+        self.published_node_ids.insert(node_id.to_string());
     }
 }
 
@@ -99,32 +106,115 @@ fn validate_canvas_path(path: &Path) -> Result<(), &str> {
     Ok(())
 }
 
+/// Watch the canvas file and process changes
+fn watch_and_process(
+    canvas_path: &Path,
+    mut sink: impl SyndicationSink,
+    tracker_path: &Path,
+    mut tracker: PublishedTracker,
+    dry_run: bool,
+) -> Result<(), Box<dyn Error>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut debouncer = new_debouncer(Duration::from_millis(DEBOUNCE_DURATION_MS), tx)?;
+
+    debouncer
+        .watcher()
+        .watch(canvas_path, RecursiveMode::NonRecursive)?;
+
+    for res in rx {
+        match res {
+            Ok(events) => {
+                for event in events {
+                    if let DebouncedEventKind::Any = event.kind {
+                        info!("File changed, processing...");
+
+                        let content = match std::fs::read_to_string(canvas_path) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                error!(error = %e, "Failed to read file");
+                                continue;
+                            }
+                        };
+
+                        let canvas = match JsonCanvas::from_str(&content) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                error!(error = %e, "Failed to parse canvas");
+                                continue;
+                            }
+                        };
+
+                        let syndication_items = to_syndication_format(canvas, Some(default_process_node));
+                        debug!(items_count = syndication_items.len(), "Found items to syndicate");
+
+                        let new_items: Vec<_> = syndication_items
+                            .iter()
+                            .filter(|item| !tracker.is_published(&item.id))
+                            .collect();
+
+                        info!(
+                            new_items = new_items.len(),
+                            already_published = syndication_items.len() - new_items.len(),
+                            "Filtered items"
+                        );
+
+                        let mut published_count = 0;
+                        for item in &new_items {
+                            match sink.publish(item, dry_run) {
+                                Ok(()) => {
+                                    info!(node_id = %item.id, "Published item");
+                                    tracker.mark_published(&item.id);
+                                    published_count += 1;
+                                }
+                                Err(e) => error!(node_id = %item.id, error = %e, "Failed to publish item"),
+                            }
+                        }
+
+                        if published_count > 0 {
+                            match tracker.save(tracker_path) {
+                                Ok(()) => info!(
+                                    total_published = tracker.published_node_ids.len(),
+                                    "Saved tracker"
+                                ),
+                                Err(e) => error!(error = %e, "Failed to save tracker"),
+                            }
+                        }
+                    }
+                }
+            }
+            Err(error) => error!(error = ?error, "Watch error"),
+        }
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<(dyn Error)>> {
-    // Initialize tracing subscriber with line numbers
-    // Use DEBUG level when dry_run is true, otherwise INFO
-    let log_level = if DRY_RUN { "debug" } else { "info" };
+    // Initialize logging (DEBUG when dry-run, INFO otherwise)
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(log_level))
+        .with_env_filter(EnvFilter::new(if DRY_RUN { "debug" } else { "info" }))
         .with_line_number(true)
         .with_file(true)
         .with_target(false)
         .init();
 
+    // Setup canvas file path
     let canvas_path = PathBuf::from(CANVAS_FILE_PATH);
     validate_canvas_path(&canvas_path)?;
 
-    // Initialize JJ repository sink
-    let mut jj_sink = JjRepositorySink::new(
-        JJ_REPO_PATH,
-        JJ_BOOKMARK_NAME,
-        JJ_REMOTE_NAME,
-        JJ_FOLDER_PATH,
+    // Setup syndication sink
+    let jj_sink = JjRepositorySink::new(
+        JJ_SINK_CONFIG.repo_path,
+        JJ_SINK_CONFIG.bookmark_name,
+        JJ_SINK_CONFIG.remote_name,
+        JJ_SINK_CONFIG.folder_path,
     )?;
 
-    // Generate tracker path based on canvas file and sink name
+    // Setup deduplication tracker
     let tracker_path = get_tracker_path(&canvas_path, "jj")?;
-    let mut jj_tracker = PublishedTracker::load(&tracker_path)?;
+    let jj_tracker = PublishedTracker::load(&tracker_path)?;
 
+    // Log configuration
     info!(
         canvas_file = %canvas_path.display(),
         debounce_ms = DEBOUNCE_DURATION_MS,
@@ -137,93 +227,6 @@ fn main() -> Result<(), Box<(dyn Error)>> {
         "Loaded published tracker"
     );
 
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    // Create a debounced watcher
-    let mut debouncer = new_debouncer(Duration::from_millis(DEBOUNCE_DURATION_MS), tx)?;
-
-    debouncer
-        .watcher()
-        .watch(&canvas_path, RecursiveMode::NonRecursive)?;
-
-    for res in rx {
-        match res {
-            Ok(events) => {
-                // Process debounced events
-                for event in events {
-                    match event.kind {
-                        DebouncedEventKind::Any => {
-                            info!("File changed, processing...");
-                            // Read the file and parse it
-                            match std::fs::read_to_string(&canvas_path) {
-                                Ok(content) => {
-                                    match JsonCanvas::from_str(&content) {
-                                        Ok(canvas) => {
-                                            let syndication_items = to_syndication_format(
-                                                canvas,
-                                                Some(default_process_node),
-                                            );
-                                            debug!(
-                                                items_count = syndication_items.len(),
-                                                "Found items to syndicate"
-                                            );
-
-                                            // Filter out already-published items
-                                            let new_items: Vec<_> = syndication_items
-                                                .iter()
-                                                .filter(|item| !jj_tracker.is_published(&item.id))
-                                                .collect();
-
-                                            info!(
-                                                new_items = new_items.len(),
-                                                already_published = syndication_items.len() - new_items.len(),
-                                                "Filtered items"
-                                            );
-
-                                            // Publish each new item
-                                            let mut published_count = 0;
-                                            for item in &new_items {
-                                                match jj_sink.publish(item, DRY_RUN) {
-                                                    Ok(()) => {
-                                                        info!(node_id = %item.id, "Published item");
-                                                        // Mark as published
-                                                        jj_tracker.mark_published(&item.id);
-                                                        published_count += 1;
-                                                    }
-                                                    Err(e) => error!(
-                                                        node_id = %item.id,
-                                                        error = %e,
-                                                        "Failed to publish item"
-                                                    ),
-                                                }
-                                            }
-
-                                            // Save tracker if we published anything
-                                            if published_count > 0 {
-                                                match jj_tracker.save(&tracker_path) {
-                                                    Ok(()) => info!(
-                                                        total_published = jj_tracker.published_node_ids.len(),
-                                                        "Saved tracker"
-                                                    ),
-                                                    Err(e) => error!(error = %e, "Failed to save tracker"),
-                                                }
-                                            }
-                                        }
-                                        Err(e) => error!(error = %e, "Failed to parse canvas"),
-                                    }
-                                }
-                                Err(e) => error!(error = %e, "Failed to read file"),
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Err(error) => {
-                error!(error = ?error, "Watch error");
-            }
-        }
-    }
-
-    Ok(())
+    // Start watching and processing
+    watch_and_process(&canvas_path, jj_sink, &tracker_path, jj_tracker, DRY_RUN)
 }
