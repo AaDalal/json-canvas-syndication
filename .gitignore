@@ -1,1 +1,4 @@
 /target
+
+# Local plist (created from .example)
+com.syndicate-json-canvas.plist
