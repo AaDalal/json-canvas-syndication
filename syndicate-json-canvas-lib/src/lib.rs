@@ -1,7 +1,29 @@
+//! Core library for syndicating JSON Canvas content.
+//!
+//! This crate provides:
+//!
+//! - **Data types**: [`SyndicationFormat`] for representing content to syndicate
+//! - **Canvas processing**: [`to_syndication_format`] and [`default_process_node`] for
+//!   parsing and filtering JSON Canvas files
+//! - **Sink trait**: [`SyndicationSink`] trait that sink implementations must implement
+//! - **Tracker**: [`SyndicationTracker`] for deduplication (tracking published nodes)
+//! - **Orchestration**: [`watch_and_process`] for file watching and publishing workflow
+//!
+//! Sink implementations (JJ repository, Twitter) are in the `syndicate-json-canvas-sinks` crate.
+
 use std::collections::HashMap;
 
 pub use jsoncanvas;
 use jsoncanvas::{JsonCanvas, node::GenericNodeInfo, NodeId, EdgeId};
+
+pub mod sink;
+pub mod tracker;
+pub mod orchestrator;
+
+// Re-exports for convenient access
+pub use sink::{SinkError, SyndicationSink};
+pub use tracker::SyndicationTracker;
+pub use orchestrator::{validate_canvas_path, process_canvas, watch_and_process};
 
 // Simplified SyndicationFormat without lifetimes
 #[derive(Debug, Clone)]

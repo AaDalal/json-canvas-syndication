@@ -7,10 +7,7 @@ edition = "2024"
 members = ["syndicate-json-canvas-sinks"]
 
 [dependencies]
-notify-debouncer-mini = "0.5.0"
 syndicate-json-canvas-lib = { path = "syndicate-json-canvas-lib" }
 syndicate-json-canvas-sinks = { path = "syndicate-json-canvas-sinks" }
-toml = "0.8"
-serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -1500,7 +1500,11 @@ name = "syndicate-json-canvas-lib"
 version = "0.1.0"
 dependencies = [
  "jsoncanvas",
+ "notify-debouncer-mini",
+ "serde",
  "thiserror 2.0.17",
+ "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -1522,11 +1526,8 @@ dependencies = [
 name = "syndicate-obsidian-canvas"
 version = "0.1.0"
 dependencies = [
- "notify-debouncer-mini",
- "serde",
  "syndicate-json-canvas-lib",
  "syndicate-json-canvas-sinks",
- "toml",
  "tracing",
  "tracing-subscriber",
 ]

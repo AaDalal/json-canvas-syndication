@@ -6,3 +6,7 @@ edition = "2024"
 [dependencies]
 jsoncanvas = "0.1.6"
 thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+tracing = "0.1"
+notify-debouncer-mini = "0.5"
