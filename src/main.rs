@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     // ===== Canvas Configuration =====
-    let canvas_path = PathBuf::from("/Users/aadalal/Documents/scratchpad/Thoughts.canvas");
+    let canvas_path = PathBuf::from("/Users/aadalal/Documents/scratchpad/thoughts/Thoughts.canvas");
     validate_canvas_path(&canvas_path)?;
 
     // ===== Sink Configuration =====
